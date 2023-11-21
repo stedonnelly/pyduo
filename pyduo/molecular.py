@@ -5,12 +5,12 @@ Created on Thu Nov  2 20:27:20 2023
 
 @author: shaun
 """
-from functionals import *
-from containers import *
-from electronic import *
+from .functionals import *
+from .containers import *
+from .electronic import *
 import os
 import subprocess
-from api import *
+from .api import *
 from scipy.optimize import minimize
 
 class MolecularSystem:
@@ -86,7 +86,10 @@ class MolecularSystem:
                 
         if self.off_diagonal:
             for key, component in self.off_diagonal.items():
-                self.abinitio_blocks.append(component.create_ab_initio_block())
+                try:
+                    self.abinitio_blocks.append(component.create_ab_initio_block())
+                except AttributeError:
+                    pass
 
     def generate_unique_filename(self, base_path='.'):
         """
@@ -103,7 +106,7 @@ class MolecularSystem:
                 return input_filename, output_filename
             else:
                 version_number += 1
-    def run_duo(self):
+    def run_duo(self,state_number=None):
         """
         Runs DUO with the generated input file and saves the output.
         """
@@ -118,9 +121,9 @@ class MolecularSystem:
         command = f"duo < {self.input_filename} > {self.output_filename}"
         subprocess.run(command, shell=True)
         if "frequencies" in str(self.fitting):
-            self.output = duo_output_object(self.output_filename.split('.')[-1]+'.en', weights=self.weights,output_type='frequencies')
+            self.output = duo_output_object(self.output_filename.split('.')[-1]+'.en', weights=self.weights,output_type='frequencies',state_number=state_number)
         elif "energies" in str(self.fitting):
-            self.output = duo_output_object(self.output_filename.split('.')[-1]+'.en', weights=self.weights,output_type='energies')
+            self.output = duo_output_object(self.output_filename.split('.')[-1]+'.en', weights=self.weights,output_type='energies',state_number=state_number)
     
     def generate_input(self):
         """Constructs the final input for DUO by iterating over all stored components."""
@@ -245,8 +248,10 @@ class MolecularSystem:
     
     def initialise(self):
         self.input_filename, self.output_filename = self.generate_unique_filename()
+        self.energy_output = self.output_filename.split('.')[-1]+'.en'
+        pyduo_logger.info(f'Creating file {self.input_filename}')
     
-    def single_fit_step(self, state, component_name, verbose=False):
+    def single_fit_step(self, state, component_name, verbose=False, state_fit=False):
         """
         Performs a single fit step for the specified component.
     
@@ -257,9 +262,13 @@ class MolecularSystem:
             # Update the parameters in the MolecularSystem
             self.update_parameters(state, params, component)
             # Run DUO and generate output
-            self.run_duo()
+            if state_fit:
+                self.run_duo(state.potential_energy.state_number)
+            else:
+                self.run_duo()
             # Calculate the RMS error from DUO output
             rms_error = self.output.rms  # Assuming this is correctly calculated and stored
+            pyduo_logger.info(rms_error)
             
             return rms_error
         
@@ -274,7 +283,8 @@ class MolecularSystem:
         # Extract parameters for the specified component
         params = self.extract_parameters(state, component_name)
         # Perform optimization using the extracted parameters
-        result = minimize(objective_function, params, args=(state, component_name,), callback=callback, method='Nelder-Mead')
+        result = minimize(objective_function, params, args=(state, component_name,), callback=callback, method='Nelder-Mead',
+                          options={"disp": True, "adaptive": True, 'xatol': 1e4})
         # Update the component's parameters with the optimized values
         self.update_parameters(state, result.x, component_name)
     
@@ -347,7 +357,7 @@ class MolecularSystem:
         # Return the optimization result
         return result
     
-    def iterative_fit(self, state_vary=None, off_diagonal_vary=None, convergence_threshold=1e-6, max_iterations=100,verbose=False):
+    def iterative_fit(self, state_vary=None, off_diagonal_vary=None, convergence_threshold=1e-6, max_iterations=100, verbose=False, state_fit=False):
         """
         Iteratively fits the parameters in different blocks until convergence.
 
@@ -357,38 +367,42 @@ class MolecularSystem:
         """
         self.fitting_active = True
         previous_rms = float('inf')  # Initialize with a very large number
+        previous_rms = 0
         for iteration in range(max_iterations):
             # Alternate fitting steps between blocks
             if state_vary:
                 for state in state_vary:
-                    print(f'Fitting {state}')
+                    pyduo_logger.info(f'Fitting {state}')
                     for component_name in state_vary[state].keys():
-                        print(f"FITTING COMPONENT {component_name}")
-                        self.single_fit_step(self.states[state], component_name)
+                        pyduo_logger.info(f"FITTING COMPONENT {component_name}")
+                        self.single_fit_step(self.states[state], component_name, state_fit=state_fit)
                         # After fitting, run DUO to get the new RMS
                         self.run_duo()
                         current_rms = self.output.rms
         
                         # Check convergence criterion
                     rms_change = abs(previous_rms - current_rms)
+                previous_rms = current_rms
             if off_diagonal_vary:
                 for off_diagonal_name in off_diagonal_vary.keys():
-                    print(f"FITTING OFF-DIAGONAL {off_diagonal_name}")
+                    pyduo_logger.info(f"FITTING OFF-DIAGONAL {off_diagonal_name}")
                     self.single_fit_step_off_diag(self.off_diagonal[off_diagonal_name])
                     self.run_duo()
                     current_rms=self.output.rms
+                    rms_change = abs(previous_rms - current_rms)
+                previous_rms = current_rms
             if rms_change < convergence_threshold:
-                print(f"Converged after {iteration+1} iterations.")
-                print(f"Iteration {iteration+1}: RMS = {current_rms}")
+                pyduo_logger.info(f"Converged after {iteration+1} iterations.")
+                pyduo_logger.info(f"Iteration {iteration+1}: RMS = {current_rms}")
                 return
-            previous_rms = current_rms
-            print(f"Iteration {iteration+1}: RMS = {current_rms}")
+            pyduo_logger.info(f"Iteration {iteration+1}: RMS = {current_rms}")
             if not state_vary and not off_diagonal_vary:
                 raise ValueError("No states or off-diagonals set to vary")
 
-        print("Maximum iterations reached without convergence.")
+        pyduo_logger.warning("Maximum iterations reached without convergence.")
         if verbose:
-            print("Optimization result:")
-            print(result.x)        
+            pyduo_logger.info("Optimization result:")
+            pyduo_logger.info(f'Final results {result.x}')
         # Return the optimization result
         return result
+    

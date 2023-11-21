@@ -6,6 +6,8 @@ Created on Thu Nov  2 13:50:53 2023
 @author: shaun
 """
 
+import pandas as pd
+
 class EMO:
     def __init__(self, **kwargs):
         # Here we can define attributes specific to EMO functional
@@ -146,17 +148,63 @@ class POLYNOM_DECAY_24:
         values_dict['AINF'] = (self.AINF, False)
         return values_dict
         
+class LORENTZ:
+    def __init__(self, **kwargs):
+        self.V0 = kwargs.get('V0',0.0)
+        self.RE = kwargs.get('RE',0.0)
+        self.GAMMA = kwargs.get('GAMMA',0.0)
+        self.A_values = kwargs.get('A_values',0.0)
+    
+    def to_dict(self):
         
-
-
-
-
-
-
-
-
-
-
+        values_dict = {
+            "V0": (self.V0, False),
+            "RE": (self.RE, False),
+            "GAMMA": (self.GAMMA, False)
+            }
+        for i, val in enumerate(self.A_values):
+            values_dict[f'A{i}'] = (val, False)
+        return values_dict
+        
+class GRID:
+    def __init__(self, data_csv):
+        self.values_df = pd.read_csv(data_csv, names=['R', 'VALUES'],skiprows=1)
+        self.R = self.values_df['R']
+        self.VALUES = self.values_df['VALUES']
+        
+    def to_dict(self):
+        values_dict = self.values_df.set_index(self.values_df.columns[0])[self.values_df.columns[1]].to_dict()
+        return values_dict
+        
+class MLR:
+    def __init__(self,**kwargs):
+        # Here we can define attributes specific to EMO functional
+        self.V0 = kwargs.get('V0', 0.0)
+        self.RE = kwargs.get('RE', 0.0)
+        self.DE = kwargs.get('DE', 0.0)
+        self.RREF = kwargs.get('RREF', -1.0)
+        self.P = kwargs.get('P', 0.0)
+        self.NL = kwargs.get('NL', 0.0)
+        self.NR = kwargs.get('NR', 0.0)
+        self.A_values = kwargs.get('A_values', [])
+        self.B_values = kwargs.get('B_values', [])
+        
+    def to_dict(self):
+        """Converts the EMO attributes to a dictionary"""
+        values_dict = {
+            "V0": (self.V0, False),
+            "RE": (self.RE, False),
+            "DE": (self.DE, False),
+            "RREF": (self.RREF, False),
+            "P": (self.P, False),
+            "NL": (self.NL, False),
+            "NR": (len(self.B_values)-1, False),
+        }
+        for i, val in enumerate(self.B_values):
+            values_dict[f"B{i}"] = (val, False)
+        for i, val in enumerate(self.A_values):
+            values_dict[f"A{i+1}"] = (val, False)
+        return values_dict
 
 
 
