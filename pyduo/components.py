@@ -18,6 +18,7 @@ class PotentialEnergy:
         self.values_dict = functional_instance.to_dict()
         self.ab_initio_data = None  # Placeholder for ab initio data
         self.sigma = sigma
+        self.ab_initio_fit_factor = 1e-12
 
     def set_parameters_to_vary(self, vary_parameters):
         for param in vary_parameters:
@@ -49,11 +50,12 @@ class PotentialEnergy:
             out_dict['AINF'] = self.values_dict['AINF'][0]
         return out_dict
     
-    def set_ab_initio_data(self, df):
+    def set_ab_initio_data(self, df, ab_initio_fit_factor=None):
         """
         Sets the ab initio data for the potential energy object.
         Expects a pandas DataFrame with columns ['r', 'energy'].
         """
+        self.ab_initio_fit_factor = ab_initio_fit_factor
         self.ab_initio_data = df
         
     def create_ab_initio_block(self):
@@ -63,7 +65,7 @@ lambda {self.lambda_}
 type grid
 mult {self.mult}
 units angstrom cm-1
-fit_factor 1e-12
+fit_factor {self.ab_initio_fit_factor}
 values"""
         values_str = self.ab_initio_data.to_csv(sep='\t', index=False, header=False)
         final_str = '\n'.join([preamble, values_str[:-1],"end"])
@@ -85,9 +87,12 @@ values"""
         ])
         
         # Add values from values_dict
-        for key, (val, _), in self.values_dict.items():
-            lines.append(f"{key}           {val:.14E}")
-
+        try:
+            for key, val, in self.values_dict.items():
+                lines.append(f"{key}           {val:.14E}")
+        except TypeError:
+            for key, (val, _), in self.values_dict.items():
+                lines.append(f"{key}           {val:.14E}")
         lines.append("end")
         return "\n".join(lines)
 
@@ -148,7 +153,7 @@ class SpinOrbitX:
 name {self.name}
 spin {self.spin[0]} {self.spin[0]}
 lambda {self.lambda_[0]} {self.lambda_[1]}
-sigma {self.sigma} {self.sigma}
+sigma {self.sigma[0]} {self.sigma[0]}
 factor i
 <x|LZ|y> -i -i
 type grid
@@ -210,6 +215,81 @@ units angstrom cm-1"""
         lines.append('end')
         return "\n".join(lines)
     
+class SpinOrbitX_Y(SpinOrbitX):
+    def __init__(self, functional_instance, spin=None, sigma=None, lambda_=None,
+                 name="<State1|LS|State2>",
+                 potential_energy_instance1=None, potential_energy_instance2=None,
+                 factor="i",lz_factors=None):
+        self.object_type = "spin-orbit"
+        self.potential_energy_instance1 = potential_energy_instance1
+        self.potential_energy_instance2 = potential_energy_instance2
+        self.functional_instance = functional_instance
+        self.expansion_type = functional_instance.__class__.__name__
+        self.factor = factor
+        if potential_energy_instance1 and potential_energy_instance2:
+            self.name = f'<{self.potential_energy_instance1.name}|LSY|{self.potential_energy_instance2.name}>'
+            self.mult = (self.potential_energy_instance1.mult, self.potential_energy_instance2.mult)
+            self.state_numbers = (self.potential_energy_instance1.state_number,self.potential_energy_instance2.state_number)
+        else:
+            raise ValueError("Requires both potential_energy_instance1 and potential_energy_instance2")
+        self.values_dict = self.functional_instance.to_dict()
+        if not spin:
+            self.spin = ((self.mult[0]-1)/2,(self.mult[1]-1)/2)
+        else:
+            self.spin = spin
+        if not lambda_:
+            self.lambda_ = (self.potential_energy_instance1.lambda_, self.potential_energy_instance2.lambda_)
+        else:
+            self.lambda_ = lambda_
+        if not sigma:
+            self.sigma = (self.spin[0], -self.spin[1])
+        else:
+            self.sigma = sigma
+        if not lz_factors:
+            self.lz_factors = [0,0]
+            for ind, val in enumerate(self.lambda_):
+                if val == 0:
+                    self.lz_factors[ind] = 0
+                else:
+                    self.lz_factors[ind] = "-i"
+        else:
+            self.lz_factors = lz_factors
+        
+    def create_ab_initio_block(self):
+        preamble = f"""abinitio spin-orbit-x {self.state_numbers[0]} {self.state_numbers[1]}
+name {self.name}
+spin {self.spin[0]} {self.spin[0]}
+lambda {self.lambda_[0]} {self.lambda_[1]}
+sigma {self.sigma[0]} {self.sigma[1]}
+factor i
+<x|LZ|y> {self.lz_factors[0]} {self.lz_factors[1]}
+type grid
+units angstrom cm-1
+fit_factor 1-e12
+values"""
+        values_str = self.ab_initio_data.to_csv(sep='\t', index=False, header=False)
+        final_str = '\n'.join([preamble, values_str[:-1],"end"])
+        return final_str    
+    
+    def __str__(self):
+        lines = []
+        #values_str = "\n".join([f'{key:<13}{value[0]:.14E}' for key, value in self.values_dict.items()])
+        preamble =  f"""spin-orbit {self.state_numbers[0]} {self.state_numbers[1]}
+name "{self.name}"
+spin {self.spin[0]} {self.spin[1]}
+lambda {self.lambda_[0]} {self.lambda_[1]}
+sigma {self.sigma[0]} {self.sigma[1]}
+factor {self.factor}
+type {self.expansion_type}
+units angstrom cm-1"""
+        lines.append(preamble)
+        if self.expansion_type == "POLYNOM_DECAY_24":
+            lines.append('morphing')
+        lines.append('values')
+        for key, (val, _) in self.values_dict.items():
+            lines.append(f"{key}           {val:.14E}")
+        lines.append('end')
+        return "\n".join(lines)
 
 class SpinOrbit(SpinOrbitX):
     def __init__(self, functional_instance, spin=None, sigma=None, lambda_=None,
@@ -409,9 +489,21 @@ class SpinRot:
         lines.append("end")
         return "\n".join(lines)
     
-class SpinSpin(SpinRot):
-    def __init__(self):
-        self.type="spin_rot"
+class SpinSpin:
+    def __init__(self,state1, state2, functional_instance,factor=1, sigmas=None):
+        self.type="spin_spin"
+        self.functional_instance = functional_instance
+        self.expansion_type = functional_instance.__class__.__name__
+        self.factor=factor
+        self.units = 'cm-1'
+        self.state_numbers = (state1.potential_energy.state_number, state2.potential_energy.state_number)
+        self.spin = ((state1.potential_energy.mult-1)/2, (state2.potential_energy.mult-1)/2)
+        if not sigmas:
+            self.sigmas = ((state1.potential_energy.mult-1)/2, (state2.potential_energy.mult-1)/2)
+        self.lambdas = (state1.potential_energy.lambda_, state2.potential_energy.lambda_)
+        self.name = f"<{state1.name}|SS|{state2.name}>"
+        self.values_dict = self.functional_instance.to_dict()
+        
     def set_parameters_to_vary(self, vary_parameters):
         for param in vary_parameters:
             if param in self.values_dict:
@@ -443,16 +535,16 @@ class SpinSpin(SpinRot):
         return out_dict        
         
     def __str__(self):
-        values_str = "\n".join([f"{key:<13}{value[0]:.14E}" for key, value in self.values_dict.items()])
+        #values_str = "\n".join([f"{key:<13}{value[0]:.14E}" for key, value in self.values_dict.items()])
         lines = []
         lines.append(f'spin-spin {self.state_numbers[0]} {self.state_numbers[1]}')
         lines.append(f'name {self.name}')
         lines.append(f'spin {self.spin[0]} {self.spin[1]}')
-        lines.append(f'lambda {self.lambda_[0]} {self.lambda_[1]}')
-        lines.append(f'sigma {(self.mult-1)/2} {(self.mult-1)/2}')
+        lines.append(f'lambda {self.lambdas[0]} {self.lambdas[1]}')
+        lines.append(f'sigma {self.sigmas[0]} {self.sigmas[0]}')
         lines.append(f'factor {self.factor}')
         lines.append(f'type {self.expansion_type}')
-        lines.append(f'values')
+        lines.append('values')
         for key, (val, _) in self.values_dict.items():
             lines.append(f"{key}           {val:.14E}")
         lines.append("end")
@@ -658,5 +750,123 @@ values"""
         lines.append("end")
         return '\n'.join(lines)
 
+class diabatic:
+    def __init__(self, state1, state2, functional_instance, lambdas=None, spin=None,
+                 factor=1):
+        self.state1 = state1
+        self.state2 = state2
+        self.functional_instance = functional_instance
+        self.expansion_type = functional_instance.__class__.__name__
+        self.state_numbers = (state1.potential_energy.state_number, self.state2.potential_energy.state_number)
+        self.factor = factor
+        self.name = f'<{self.state1.name}|DC|{self.state2.name}>'
+        self.lambda_ = (self.state1.potential_energy.lambda_, self.state2.potential_energy.lambda_)
+        self.spin = ((self.state1.potential_energy.mult-1)/2, (self.state2.potential_energy.mult-1)/2)
+        self.values_dict = self.functional_instance.to_dict()
+        
+    def set_parameters_to_vary(self, vary_parameters):
+        for param in vary_parameters:
+            if param in self.values_dict:
+                value, _ = self.values_dict[param]
+                self.values_dict[param] = (value, True)
+    
+    def get_varying_parameters(self):
+        """Retrieve parameters that are marked to vary."""
+        return {key: val for key, (val, vary) in self.values_dict.items() if vary}
+
+    def update_values(self, updated_values_dict):
+        """Update the values after optimization."""
+        for key, (value, vary) in self.values_dict.items():
+            if vary:
+                # Update the value while keeping the vary flag unchanged
+                self.values_dict[key] = (updated_values_dict[key], vary)
+    
+    def output_params_dict(self):
+        out_dict = {}
+        A_values = []
+        for key, value in self.values_dict.items():
+            if "A" not in key:
+                out_dict[key] = value[0]
+            elif "A" in key and key != "AINF":
+                A_values.append(value[0])
+        out_dict["A_values"] = A_values
+        if "AINF" in self.values_dict.keys():
+            out_dict['AINF'] = self.values_dict['AINF'][0]
+        return out_dict
+    
+    def __str__(self):
+        lines = []
+        values_str = "\n".join([f'{key:<13}{value[0]:.14E}' for key, value in self.values_dict.items()])
+        preamble = f"""diabatic {self.state_numbers[0]} {self.state_numbers[1]}
+name "{self.name}"
+lambda {self.lambda_[0]} {self.lambda_[1]}
+spin {self.spin[0]} {self.spin[1]}
+type {self.expansion_type}
+factor {self.factor}
+values"""
+        lines.append(preamble)
+        for key, (val, _) in self.values_dict.items():
+            lines.append(f"{key}           {val:.14E}")
+        lines.append("end")
+        return '\n'.join(lines)
 
 
+class NAC:
+    def __init__(self, state1, state2, functional_instance, lambdas=None, spin=None,
+                 factor=1):
+        self.state1 = state1
+        self.state2 = state2
+        self.functional_instance = functional_instance
+        self.expansion_type = functional_instance.__class__.__name__
+        self.state_numbers = (state1.potential_energy.state_number, self.state2.potential_energy.state_number)
+        self.factor = factor
+        self.name = f'<{self.state1.name}|DC|{self.state2.name}>'
+        self.lambda_ = (self.state1.potential_energy.lambda_, self.state2.potential_energy.lambda_)
+        self.spin = ((self.state1.potential_energy.mult-1)/2, (self.state2.potential_energy.mult-1)/2)
+        self.values_dict = self.functional_instance.to_dict()
+        
+    def set_parameters_to_vary(self, vary_parameters):
+        for param in vary_parameters:
+            if param in self.values_dict:
+                value, _ = self.values_dict[param]
+                self.values_dict[param] = (value, True)
+    
+    def get_varying_parameters(self):
+        """Retrieve parameters that are marked to vary."""
+        return {key: val for key, (val, vary) in self.values_dict.items() if vary}
+
+    def update_values(self, updated_values_dict):
+        """Update the values after optimization."""
+        for key, (value, vary) in self.values_dict.items():
+            if vary:
+                # Update the value while keeping the vary flag unchanged
+                self.values_dict[key] = (updated_values_dict[key], vary)
+    
+    def output_params_dict(self):
+        out_dict = {}
+        A_values = []
+        for key, value in self.values_dict.items():
+            if "A" not in key:
+                out_dict[key] = value[0]
+            elif "A" in key and key != "AINF":
+                A_values.append(value[0])
+        out_dict["A_values"] = A_values
+        if "AINF" in self.values_dict.keys():
+            out_dict['AINF'] = self.values_dict['AINF'][0]
+        return out_dict
+    
+    def __str__(self):
+        lines = []
+        values_str = "\n".join([f'{key:<13}{value[0]:.14E}' for key, value in self.values_dict.items()])
+        preamble = f"""NAC {self.state_numbers[0]} {self.state_numbers[1]}
+name "{self.name}"
+lambda {self.lambda_[0]} {self.lambda_[1]}
+spin {self.spin[0]} {self.spin[1]}
+type {self.expansion_type}
+factor {self.factor}
+values"""
+        lines.append(preamble)
+        for key, (val, _) in self.values_dict.items():
+            lines.append(f"{key}           {val:.14E}")
+        lines.append("end")
+        return '\n'.join(lines)

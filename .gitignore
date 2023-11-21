@@ -6,3 +6,5 @@ __pycache__/
 env/
 build/
 dist/
+.spyproject/
+Watcher.py

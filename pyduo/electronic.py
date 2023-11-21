@@ -1,13 +1,6 @@
-#!/usr/bin/env python3
-# -*- coding: utf-8 -*-
-"""
-Created on Thu Nov  2 20:27:20 2023
-
-@author: shaun
-"""
-
-from containers import *
-from functionals import *
+from .containers import *
+from .functionals import *
+from .components import *
 import pandas as pd
 
 class ElectronicState:
@@ -154,7 +147,33 @@ class OffDiagonalComponents:
             else:
                 raise ValueError("No ab initio data provided")
         self.components[spin_orbit_object.name] = spin_orbit_object
-
+    
+    def generate_ls_x_coupling(self, state1, state2, ab_initio, functional_instance,
+                             sigmas = (0,0),lambdas = (0,0), spin = None,
+                             override_ab_initio = False):
+        spin_orbit_object = SpinOrbitX_Y(functional_instance,potential_energy_instance1 = state1.potential_energy, potential_energy_instance2 = state2.potential_energy,
+                                      sigma = sigmas, lambda_ = lambdas, spin = spin)
+        if ab_initio:
+            spin_orbit_object.set_ab_initio_data(pd.read_csv(ab_initio))
+        else:
+            if override_ab_initio:
+                pass
+            else:
+                raise ValueError("No ab initio data provided")
+        self.components[spin_orbit_object.name] = spin_orbit_object
+    
+    def generate_spin_spin_couplings(self, state1, state2, functional_instance,sigmas=None):
+        spin_spin_coupling = SpinSpin(state1, state2, functional_instance,sigmas)
+        self.components[spin_spin_coupling.name] = spin_spin_coupling
+        
+    def generate_diabatic(self, state1, state2, functional_instance):
+        diabatic_object = diabatic(state1, state2,functional_instance)
+        self.components[diabatic_object.name] = diabatic_object
+    
+    def generate_nac(self, state1, state2, functional_instance):
+        nac_object = NAC(state1, state2,functional_instance)
+        self.components[nac_object.name] = nac_object
+        
 
 
 

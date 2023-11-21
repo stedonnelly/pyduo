@@ -1,8 +1,8 @@
-from functionals import EMO
+from .functionals import EMO
 from mendeleev import element
 import csv
 import pandas as pd
-from components import *
+from .components import *
 
 class MoleculeInformation:
     def __init__(self, atom1, atom2, mass1, mass2):
@@ -40,8 +40,17 @@ class ContractionBlock:
         """Initializes the ContractionBlock with a list of PotentialEnergyBlock objects."""
         self.potential_blocks = potential_blocks
     
+    def extract_DE(self,block):
+        try:
+            de = block.values_dict['DE'][0]
+            return de
+        except:
+            key = list(block.values_dict.keys())[-1]
+            de = block.values_dict[key]
+            return de
+    
     def __str__(self):
-        DE_values = [block.values_dict['DE'][0] for block in self.potential_blocks]
+        DE_values = [self.extract_DE(block) for block in self.potential_blocks]
         DE_values_str = " ".join([f"{DE:.14E}" for DE in DE_values])
         return f"CONTRACTION\n    enermax {DE_values_str}\nEND"
 
@@ -71,7 +80,7 @@ class Fitting:
             f"JLIST\t{', '.join(self.jlist)}",
             "itmax 0",
             "fit_factor\t1e12",
-            "lock\t0",
+            "lock\t10000",
             f"output\t{self.output_name}",
             "robust 0.0000001",
             "target_rms 0.000001",
